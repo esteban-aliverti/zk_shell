@@ -2504,6 +2504,147 @@ child_watches=%s"""
     @connected
     @ensure_params(
         Required("path"),
+        IntegerOptional("top", 0),
+        IntegerOptional("minfreq", 1),
+        LabeledBooleanOptional("reverse", default=True),
+        LabeledBooleanOptional("report_errors", default=False),
+        LabeledBooleanOptional("print_path", default=False),
+    )
+    @check_paths_exists("path")
+    def do_count_values(self, params):
+        """
+\x1b[1mNAME\x1b[0m
+        count_values - Gets the frequency of the values of the nodes
+
+\x1b[1mSYNOPSIS\x1b[0m
+        count_values <path> [top] [minfreq] [reverse] [report_errors] [print_path]
+
+\x1b[1mOPTIONS\x1b[0m
+        * top: number of results to show (0 is all) (default: 0)
+        * minfreq: minimum frequency to be displayed (default: 1)
+        * reverse: sort in descending order (default: true)
+        * report_errors: report bad znodes (default: false)
+        * print_path: print the path if there are results (default: false)
+
+\x1b[1mEXAMPLES\x1b[0m
+        > json_count_values /configs/primary_service endpoint.host
+        10.20.0.2  3
+        10.20.0.4  3
+        10.20.0.5  3
+        10.20.0.6  1
+        10.20.0.7  1
+        ...
+
+        """
+        path_map = PathMap(self._zk, params.path)
+
+        values = defaultdict(int)
+        for path, data in path_map.get():
+            value = data
+            values[value] += 1
+
+        results = sorted(values.items(), key=lambda item: item[1], reverse=params.reverse)
+        results = [r for r in results if r[1] >= params.minfreq]
+
+        # what slice do we want?
+        if params.top == 0:
+            start, end = 0, len(results)
+        elif params.top > 0:
+            start, end = 0, params.top if params.top < len(results) else len(results)
+        else:
+            start = len(results) + params.top if abs(params.top) < len(results) else 0
+            end = len(results)
+
+        if len(results) > 0 and params.print_path:
+            self.show_output(params.path)
+
+        for i in range(start, end):
+            value, frequency = results[i]
+            self.show_output("%s = %d", value, frequency)
+
+        # if no results were found we call it a failure (i.e.: exit(1) from --run-once)
+        if len(results) == 0:
+            return False
+
+    def complete_count_values(self, cmd_param_text, full_cmd, *rest):
+        complete_top = partial(complete_values, [str(i) for i in range(1, 11)])
+        complete_freq = partial(complete_values, [str(i) for i in range(1, 11)])
+        completers = [
+            self._complete_path,
+            complete_top,
+            complete_freq,
+            complete_labeled_boolean("reverse"),
+            complete_labeled_boolean("report_errors"),
+            complete_labeled_boolean("print_path")
+        ]
+        return complete(completers, cmd_param_text, full_cmd, *rest)
+
+    @connected
+    @ensure_params(
+        Required("leader_selector_path"),
+        LabeledBooleanOptional("print_dups_only", default=False)
+    )
+    @check_paths_exists("leader_selector_path")
+    def do_count_leader_selector_candidates(self, params):
+        """
+\x1b[1mNAME\x1b[0m
+        count_leader_selector_candidates - Counts the number of candidates a leader selector has based on the content of the locks
+
+\x1b[1mSYNOPSIS\x1b[0m
+        count_leader_selector_candidates <leader_selector_path> [print_dups_only]
+
+\x1b[1mOPTIONS\x1b[0m
+        * print_dups_only: only print jobs with duplicate locks (default: false)
+
+\x1b[1mEXAMPLES\x1b[0m
+        > count_leader_selector_candidates /unblu/7.23.2.OvnuZSBn/leaderSelector True
+        WebhookRequestDeliveryForRegistrationJob#rKuUcyybRfm52KeHWC7Xgw:
+            10.56.5.24 -> 1
+            10.56.1.39 -> 1
+        WebhookRequestDeliveryForRegistrationJob#OZhts-HtTBqf09HTgmafhw:
+            10.56.5.24 -> 1
+            10.56.1.39 -> 2
+        ...
+        """
+        path_map = PathMap(self._zk, params.leader_selector_path)
+
+        jobs = defaultdict(lambda: defaultdict(int))
+        for path, data in path_map.get():
+            path_parts = path.split("/");
+            jobName = path_parts[len(path_parts)-2]
+            if (params.leader_selector_path.endswith(jobName)) :
+                # skip the leader selector node itself
+                continue
+            job = jobs[jobName];
+            value = job[data]
+            job[data] += 1
+
+        for job in jobs:
+            txt = job + ":\n"
+            has_dups = False;
+            for node in jobs[job]:
+                countByNode = jobs[job][node]
+                if params.print_dups_only and countByNode > 1 :
+                    has_dups = True
+                    txt += "\t " + node + " -> " + str(countByNode)+"\n";
+                elif not params.print_dups_only :
+                    txt += "\t " + node + " -> " + str(countByNode) + (" [!]" if countByNode > 1 else "" )+"\n";
+            if (params.print_dups_only and has_dups) or not params.print_dups_only :       
+                self.show_output("%s", txt[:-1])
+
+        # if no results were found we call it a failure (i.e.: exit(1) from --run-once)
+        if len(jobs) == 0:
+            return False
+
+    def complete_count_leader_selector_candidates(self, cmd_param_text, full_cmd, *rest):
+        completers = [
+            self._complete_path
+        ]
+        return complete(completers, cmd_param_text, full_cmd, *rest)
+
+    @connected
+    @ensure_params(
+        Required("path"),
         Required("keys"),
         Optional("prefix", ""),
         LabeledBooleanOptional("report_errors", default=False),
